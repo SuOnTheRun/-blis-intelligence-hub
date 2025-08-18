@@ -786,7 +786,7 @@ def main():
            </div>
            """, unsafe_allow_html=True)
    
-   with tab2:
+       with tab2:
        st.markdown("## 📊 Comprehensive Intelligence Feed")
        
        # Filter controls
