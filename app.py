@@ -732,23 +732,23 @@ class EliteAnalyticsEngine:
         
         # Critical intelligence items
         threat_score += critical_items * 10
-       
-       # Market stress contribution
-       threat_score += market_stress * 0.5
-       
-       # Mobility threat contribution
-       mobility_threat_map = {'CRITICAL': 50, 'HIGH': 30, 'MEDIUM': 15, 'LOW': 5}
-       threat_score += mobility_threat_map.get(mobility_assessment.get('threat_assessment', 'LOW'), 5)
-       
-       # Classify overall threat
-       if threat_score > 150:
-           return 'CRITICAL'
-       elif threat_score > 100:
-           return 'HIGH'
-       elif threat_score > 50:
-           return 'MEDIUM'
-       else:
-           return 'LOW'
+        
+        # Market stress contribution
+        threat_score += market_stress * 0.5
+        
+        # Mobility threat contribution
+        mobility_threat_map = {'CRITICAL': 50, 'HIGH': 30, 'MEDIUM': 15, 'LOW': 5}
+        threat_score += mobility_threat_map.get(mobility_assessment.get('threat_assessment', 'LOW'), 5)
+        
+        # Classify overall threat
+        if threat_score > 150:
+            return 'CRITICAL'
+        elif threat_score > 100:
+            return 'HIGH'
+        elif threat_score > 50:
+            return 'MEDIUM'
+        else:
+            return 'LOW'
 
 # ============================================================================
 # ELITE DASHBOARD ENGINE
