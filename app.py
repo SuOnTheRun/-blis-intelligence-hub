@@ -14,6 +14,43 @@ from streamlit_folium import st_folium
 from textblob import TextBlob
 import praw
 import yfinance as yf
+import dash
+from dash import html, dcc
+
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[
+        "https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css"
+    ]
+)
+app.title = "Strategic Intelligence Command Center"
+
+# White luxury aesthetic (inline HTML override)
+app.index_string = """
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <style>
+            body { background-color: #FFFFFF; font-family: 'Inter', sans-serif; }
+            .lux-card {
+                border-radius: 1.5rem;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                padding: 1.5rem;
+                background: #FAFAFA;
+            }
+        </style>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>{%config%}{%scripts%}{%renderer%}</footer>
+    </body>
+</html>
+"""
+
 
 # -----------------------------------------------------------------------------
 # Streamlit page config (WHITE THEME)
