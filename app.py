@@ -526,3 +526,5 @@ with tab4:
 if auto_refresh:
     time.sleep(60)
     st.experimental_rerun()
+app = dash.Dash(__name__, ...)
+server = app.server  # gunicorn entry
