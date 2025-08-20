@@ -1,10 +1,14 @@
+# Core
 pandas==2.2.2
 numpy==1.26.4
+requests==2.32.3
 plotly==5.22.0
 dash==2.17.1
-requests==2.32.3
+gunicorn==23.0.0
 feedparser==6.0.11
 praw==7.7.1
 textblob==0.17.1
-keplergl==0.3.2
-gunicorn==23.0.0
+
+# Geospatial
+folium==0.17.0
+streamlit-folium==0.23.2
