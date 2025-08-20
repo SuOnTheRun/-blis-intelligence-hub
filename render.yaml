@@ -1,1 +1,1 @@
-buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+pip install --upgrade pip && pip install --only-binary=:all: -r requirements.txt
