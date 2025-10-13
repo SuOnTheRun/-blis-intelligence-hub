@@ -1,1 +1,18 @@
-pip install --upgrade pip && pip install --only-binary=:all: -r requirements.txt
+services:
+  - type: web
+    name: blis-intelligence-hub
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: REDDIT_USERNAME
+        sync: false
+      - key: REDDIT_PASSWORD
+        sync: false
+      - key: REDDIT_USER_AGENT
+        sync: false
