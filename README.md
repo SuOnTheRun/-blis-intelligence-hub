@@ -1,37 +1,17 @@
-# STRATEGIC INTELLIGENCE COMMAND CENTER
-## Enterprise-Grade OSINT Platform
+# Blis Intelligence Hub (Open-Source Signals)
 
-### CLASSIFICATION: SENSITIVE
+A quiet, executive-grade media intelligence dashboard that runs on **open data** only and refreshes every 5 minutes.  
+No placeholders. Optional Excel **plug-and-view** to overlay your foot traffic / loyalty series.
 
-This is a military-grade intelligence platform designed for strategic analysis and threat assessment.
+## Features
+- **Regions & Countries**: EU, SEA, LATAM, MENA (with country dropdowns) + first-class US/UK/CA/CN/JP/IN.
+- **Categories**: Automotive, Tech, Energy, Financials, Consumer Staples, Healthcare, Media & Advertising.
+- **Open Signals**: Reuters RSS, Yahoo Finance quotes, Google Trends, Wikipedia Pageviews, Reddit (optional).
+- **Sentiment & Momentum**: VADER headline sentiment; simple composite CCS; Reddit momentum.
+- **Excel Uploads**: Volume / Loyalty / RTFs / Trend / MABLE (wide sheets) and Crossover matrices; instant overlays.
 
-## CAPABILITIES
-
-- **Multi-Source OSINT Collection**
-- **Real-Time Threat Assessment** 
-- **Market Warfare Intelligence**
-- **Mobility & Flight Tracking**
-- **Geopolitical Analysis**
-- **Automated Threat Classification**
-
-## DATA SOURCES
-
-- Reddit Intelligence Network (10 subreddits)
-- Elite News Feeds (20+ sources)
-- Global Market Intelligence
-- Flight Tracking (OpenSky Network)
-- Real-time sentiment analysis
-
-## DEPLOYMENT
-
-1. Upload to GitHub
-2. Deploy via Streamlit Community Cloud
-3. Embed in Google Sites
-4. Access via secure URL
-
-## SECURITY
-
-- No sensitive data storage
-- Read-only API access
-- Professional-grade deployment
-- Enterprise security standards
+## Run locally
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
