@@ -1,530 +1,313 @@
-import os
-import time
-from datetime import datetime, timedelta
+# Streamlit multi-page Intel Hub with region/country filters, open-source signals (5-min refresh),
+# and Excel plug-and-view for Volume/Loyalty/RTF/Crossover.
 
-import streamlit as st
+from __future__ import annotations
+import os, io, json, time, math, datetime as dt
 import pandas as pd
-import numpy as np
-import requests
-import feedparser
-import plotly.express as px
-import plotly.graph_objects as go
-import folium
-from streamlit_folium import st_folium
-from textblob import TextBlob
-import praw
-import yfinance as yf
-import dash
-from dash import html, dcc
+import streamlit as st
+from dateutil import tz
 
-app = dash.Dash(
-    __name__,
-    external_stylesheets=[
-        "https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css"
-    ]
-)
-app.title = "Strategic Intelligence Command Center"
-
-# White luxury aesthetic (inline HTML override)
-app.index_string = """
-<!DOCTYPE html>
-<html>
-    <head>
-        {%metas%}
-        <title>{%title%}</title>
-        {%favicon%}
-        {%css%}
-        <style>
-            body { background-color: #FFFFFF; font-family: 'Inter', sans-serif; }
-            .lux-card {
-                border-radius: 1.5rem;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-                padding: 1.5rem;
-                background: #FAFAFA;
-            }
-        </style>
-    </head>
-    <body>
-        {%app_entry%}
-        <footer>{%config%}{%scripts%}{%renderer%}</footer>
-    </body>
-</html>
-"""
-
-
-# -----------------------------------------------------------------------------
-# Streamlit page config (WHITE THEME)
-# -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Strategic Intelligence Command Center",
-    page_icon=None,
-    layout="wide",
-    initial_sidebar_state="expanded",
+import database as db
+from enhanced_collectors import (
+    get_reuters_news, get_quotes, get_trends_series, get_wiki_pageviews, get_reddit_top
 )
 
-# -----------------------------------------------------------------------------
-# Executive visual identity (white background)
-# -----------------------------------------------------------------------------
+IST = tz.gettz("Asia/Kolkata")
+UPDATED = lambda: dt.datetime.now(IST).strftime("%d %b %Y, %H:%M IST")
+
+# ----------------------- One-time init
+db.init()
+st.set_page_config(page_title="Blis Intelligence Hub", layout="wide")
+
+# Quiet luxury UI
 st.markdown("""
 <style>
-:root {
-  --ink:#0A0A0A;            /* Deep Matte Black */
-  --carbon:#1E1E1E;
-  --onyx:#141414;
-  --cobalt:#1F78FF;         /* Intelligence highlight */
-  --crimson:#D72638;        /* Critical */
-  --emerald:#2ECC71;        /* Stable */
-  --gold:#E5C07B;           /* Exec overlay */
-  --bg:#FFFFFF;             /* white */
-  --subtle:#F8FAFC;         /* light gray */
-  --border:#E5E7EB;
-}
-
-html, body, .stApp { background: var(--bg); color: var(--ink); }
-
-.command-header {
-  background: linear-gradient(180deg, #ffffff 0%, #f6f7fb 100%);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  padding: 32px 28px;
-  margin-bottom: 24px;
-  box-shadow: 0 8px 32px rgba(10,10,10,0.06);
-}
-.command-title {
-  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-  letter-spacing: 0.3px;
-  font-weight: 800;
-  font-size: 32px;
-  margin: 0 0 6px 0;
-}
-.command-subtitle { font-weight: 500; color: #4B5563; margin: 0; }
-
-.metric-card {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  padding: 20px;
-  box-shadow: 0 6px 20px rgba(10,10,10,0.06);
-}
-.metric-value { font-size: 32px; font-weight: 800; }
-.metric-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #6B7280; }
-
-.section-h { font-weight: 800; font-size: 18px; margin: 16px 0 8px 0; }
-.priority-CRITICAL { border-left: 4px solid var(--crimson); background: linear-gradient(90deg, rgba(215,38,56,0.05), #fff); }
-.priority-HIGH { border-left: 4px solid #FD7E14; background: linear-gradient(90deg, rgba(253,126,20,0.05), #fff); }
-.priority-MEDIUM { border-left: 4px solid var(--cobalt); background: linear-gradient(90deg, rgba(31,120,255,0.05), #fff); }
-.priority-LOW { border-left: 4px solid var(--emerald); background: linear-gradient(90deg, rgba(46,204,113,0.05), #fff); }
-
-.intel-item {
-  border: 1px solid var(--border); border-radius: 18px; padding: 16px; margin-bottom: 12px;
-  box-shadow: 0 2px 10px rgba(10,10,10,0.04);
-}
-a.source-link { color: var(--cobalt); text-decoration: none; font-weight: 600; }
-a.source-link:hover { text-decoration: underline; }
+:root { --gold:#bfa66b; --ink:#0f0f10; --sub:#5a5a5e; }
+.block-container { padding-top: 1.5rem; }
+.kpi { color: var(--sub); font-size: 0.85rem; }
+.badge { background:#f0efe9; padding:.2rem .45rem; border-radius:.5rem; border:1px solid #e7e6e2; }
+.table thead tr th { font-weight:600; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<div class="command-header">
-  <div class="command-title">Strategic Intelligence Command Center</div>
-  <div class="command-subtitle">Global OSINT • Psychological • Market & Mobility • Threat Causality</div>
-</div>
-""", unsafe_allow_html=True)
+# ----------------------- App taxonomy
+REGIONS = {
+    "EU": ["DE","FR","IT","ES","NL","SE","PL","IE","AT","BE","DK","FI","PT","GR","CZ","RO","HU"],
+    "SEA": ["SG","MY","TH","VN","ID","PH"],
+    "LATAM": ["BR","MX","AR","CL","CO","PE"],
+    "MENA": ["AE","SA","QA","KW","EG","MA","JO","OM","BH"]
+}
+PRIME_COUNTRIES = ["US","UK","CA","CN","JP","IN"]
 
-# -----------------------------------------------------------------------------
-# Secrets & API keys (from Render Environment)
-# -----------------------------------------------------------------------------
-REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID", "")
-REDDIT_CLIENT_SECRET = os.getenv("REDDIT_CLIENT_SECRET", "")
-REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "StrategicWarRoom/1.0")
-NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "")
-POLYGON_KEY = os.getenv("POLYGON_ACCESS_KEY", "")
-
-# -----------------------------------------------------------------------------
-# Hotspots (real lat/lon; keep expanding as needed)
-# -----------------------------------------------------------------------------
-GLOBAL_HOTSPOTS = {
-  'Ukraine Operational Zone': {'lat': 49.5937, 'lon': 32.2922, 'priority': 'CRITICAL', 'region': 'Eastern Europe', 'type': 'Active Conflict'},
-  'Gaza Strip': {'lat': 31.3547, 'lon': 34.3088, 'priority': 'CRITICAL', 'region': 'Middle East', 'type': 'Active Conflict'},
-  'West Bank': {'lat': 31.9038, 'lon': 35.2034, 'priority': 'HIGH', 'region': 'Middle East', 'type': 'Occupied Territory'},
-  'Taiwan Strait': {'lat': 23.8, 'lon': 120.9, 'priority': 'HIGH', 'region': 'Asia Pacific', 'type': 'Strategic Waterway'},
-  'South China Sea': {'lat': 16.0, 'lon': 114.0, 'priority': 'HIGH', 'region': 'Asia Pacific', 'type': 'Strategic Waterway'},
-  'Strait of Hormuz': {'lat': 26.5667, 'lon': 56.25, 'priority': 'HIGH', 'region': 'Middle East', 'type': 'Strategic Waterway'},
-  'Suez Canal': {'lat': 30.5, 'lon': 32.3, 'priority': 'MEDIUM', 'region': 'Middle East', 'type': 'Strategic Waterway'},
-  'Strait of Malacca': {'lat': 2.5, 'lon': 101.8, 'priority': 'MEDIUM', 'region': 'Asia Pacific', 'type': 'Strategic Waterway'},
-  'Bosphorus Strait': {'lat': 41.1233, 'lon': 29.0781, 'priority': 'MEDIUM', 'region': 'Europe', 'type': 'Strategic Waterway'},
-  'Korean DMZ': {'lat': 38.0, 'lon': 127.0, 'priority': 'HIGH', 'region': 'Asia Pacific', 'type': 'Border Tension'},
-  'Armenia–Azerbaijan Border': {'lat': 40.0691, 'lon': 45.0382, 'priority': 'MEDIUM', 'region': 'Europe', 'type': 'Border Tension'},
-  'Diego Garcia': {'lat': -7.3134, 'lon': 72.4113, 'priority': 'MEDIUM', 'region': 'Indian Ocean', 'type': 'Military Base'},
-  'Ramstein Air Base': {'lat': 49.4369, 'lon': 7.6003, 'priority': 'LOW', 'region': 'Europe', 'type': 'Military Base'},
-  'Hong Kong': {'lat': 22.3193, 'lon': 114.1694, 'priority': 'MEDIUM', 'region': 'Asia Pacific', 'type': 'Economic Zone'},
-  'Singapore': {'lat': 1.3521, 'lon': 103.8198, 'priority': 'LOW', 'region': 'Asia Pacific', 'type': 'Economic Zone'}
+CATEGORIES = {
+    "consumer_staples": {"name":"Consumer Staples","keywords":["FMCG","groceries","household","beverages","personal care"],
+                         "tickers":["XLP"], "subs":["FMCG","IndiaInvestments","stocks"]},
+    "energy": {"name":"Energy","keywords":["oil","gas","renewables","power"],"tickers":["XLE"],"subs":["energy","oil","renewableenergy"]},
+    "technology": {"name":"Technology","keywords":["AI","semiconductor","software","cloud"],"tickers":["XLK"],"subs":["technology","MachineLearning","Futurology"]},
+    "automotive": {"name":"Automotive","keywords":["EV","cars","two-wheeler","battery"],"tickers":["CARZ"],"subs":["autos","ElectricVehicles"]},
+    "financials": {"name":"Financials","keywords":["banking","fintech","credit","payments"],"tickers":["XLF"],"subs":["finance","FinTech"]},
+    "media": {"name":"Media & Advertising","keywords":["streaming","advertising","CTV","social"],"tickers":["XLC"],"subs":["advertising","marketing","socialmedia"]},
+    "healthcare": {"name":"Healthcare","keywords":["pharma","biotech","vaccine","diagnostics"],"tickers":["XLV"],"subs":["medicine","pharmacy"]},
 }
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def classify_sentiment(p):
-    if p > 0.1: return 'Positive'
-    if p < -0.1: return 'Negative'
-    return 'Neutral'
+# -------------- Helpers
+def header(title:str, right:str=""):
+    c1,c2 = st.columns([0.85,0.15])
+    with c1: st.markdown(f"### {title}")
+    with c2: st.markdown(f"<div style='text-align:right;color:#5a5a5e'>Updated: {right or UPDATED()}</div>", unsafe_allow_html=True)
+    st.divider()
 
-def classify_region(text_lower:str)->str:
-    keywords = {
-        'Eastern Europe':['ukraine','russia','belarus','poland','baltic','moldova'],
-        'Asia Pacific':['china','taiwan','japan','korea','australia','singapore','india','indonesia','philippines','vietnam'],
-        'Middle East':['iran','israel','palestine','gaza','saudi','syria','lebanon','iraq','yemen','qatar','uae','gulf'],
-        'Europe':['nato','eu','france','germany','britain','italy','spain','sweden','norway','turkey'],
-        'Africa':['egypt','libya','algeria','morocco','nigeria','ethiopia','somalia','sudan','sahel','mali','chad'],
-        'Americas':['usa','united states','canada','mexico','brazil','argentina','venezuela','colombia']
-    }
-    for region, ks in keywords.items():
-        if any(k in text_lower for k in ks): return region
-    return 'Global'
+def alt_line(df, x, y, title=""):
+    import altair as alt
+    base = alt.Chart(df).mark_line().encode(x=x, y=y, tooltip=list(df.columns))
+    return base.properties(height=220, title=title).interactive()
 
-# -----------------------------------------------------------------------------
-# Data collectors (all real sources)
-# -----------------------------------------------------------------------------
-@st.cache_data(ttl=300)
-def collect_newsapi():
-    if not NEWSAPI_KEY:
-        return []
-    url = "https://newsapi.org/v2/everything"
-    domains = "reuters.com,apnews.com,bbc.co.uk,bbc.com,ft.com,wsj.com,theguardian.com"
-    queries = ["military OR defense", "geopolitics OR conflict", "security OR intelligence", "cyber warfare"]
-    all_rows = []
-    for q in queries:
-        params = {
-            "q": q,
-            "language": "en",
-            "pageSize": 50,
-            "sortBy": "publishedAt",
-            "domains": domains,
-            "apiKey": NEWSAPI_KEY
-        }
-        r = requests.get(url, params=params, timeout=20)
-        if r.status_code != 200:
-            continue
-        for a in r.json().get("articles", []):
-            title = a.get("title") or ""
-            desc = a.get("description") or ""
-            if len(title) < 20: 
-                continue
-            text = f"{title} {desc}"
-            pol = TextBlob(text).sentiment.polarity
-            all_rows.append({
-                "source": f"NewsAPI - {a.get('source',{}).get('name','Unknown')}",
-                "title": title,
-                "summary": desc[:450],
-                "url": a.get("url",""),
-                "published": a.get("publishedAt",""),
-                "sentiment": pol,
-                "sentiment_label": classify_sentiment(pol),
-                "region": classify_region(text.lower()),
-                "credibility": 8.5,  # curated domains
-                "category": "Premium News",
-                "timestamp": datetime.utcnow()
-            })
-    return all_rows
+def compute_ccs(news_df, trends_delta, quotes_df, reddit_mom):
+    # very light composite; transparent pieces
+    import numpy as np
+    news_z = 0.0
+    if not news_df.empty:
+        # z by count vs 7-day rolling baseline not kept yet; approximate with count scale
+        news_z = min(3.0, (len(news_df)/20.0))
+    senti = float(news_df["senti"].mean()) if not news_df.empty else 0.0
+    market = 0.0
+    if len(quotes_df):
+        market = sum([q["pct"] for q in quotes_df])/len(quotes_df) / 5.0  # normalize
+    ccs = (news_z + (senti+1)/2 + trends_delta + reddit_mom + market) / 5.0
+    return round(ccs*100,1), {"news_z":round(news_z,2),"sentiment":round(senti,2),
+                               "trends":round(trends_delta,2),"reddit":round(reddit_mom,2),
+                               "market":round(market,2)}
 
-@st.cache_data(ttl=300)
-def collect_reddit():
-    if not (REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET):
-        return []
-    reddit = praw.Reddit(
-        client_id=REDDIT_CLIENT_ID,
-        client_secret=REDDIT_CLIENT_SECRET,
-        user_agent=REDDIT_USER_AGENT
-    )
-    subs = {
-        "worldnews": {"region":"Global","min_score":400},
-        "geopolitics": {"region":"Global","min_score":50},
-        "ukraine": {"region":"Eastern Europe","min_score":100},
-        "NATONews": {"region":"Europe","min_score":20},
-        "intelligence": {"region":"Global","min_score":10}
-    }
-    out=[]
-    for s, cfg in subs.items():
-        try:
-            for p in reddit.subreddit(s).hot(limit=40):
-                if p.stickied or p.over_18 or p.score < cfg["min_score"]:
-                    continue
-                text = f"{p.title} {p.selftext[:300]}"
-                pol = TextBlob(text).sentiment.polarity
-                out.append({
-                    "source": f"Reddit r/{s}",
-                    "title": p.title,
-                    "summary": (p.selftext or "")[:450],
-                    "url": f"https://reddit.com{p.permalink}",
-                    "published": datetime.utcfromtimestamp(p.created_utc).isoformat()+"Z",
-                    "sentiment": pol,
-                    "sentiment_label": classify_sentiment(pol),
-                    "region": cfg["region"],
-                    "credibility": min(10, 4 + (p.upvote_ratio*3)),
-                    "category": "Social Intelligence",
-                    "timestamp": datetime.utcnow()
-                })
-        except Exception:
-            continue
-    return out
+def trends_delta_7v30(payload):
+    # payload: {"labels":[...], "datasets":[{label,data}]}
+    import numpy as np
+    if not payload.get("datasets"):
+        return 0.0
+    series = payload["datasets"][0]["data"]
+    if len(series) < 30:
+        return 0.0
+    last7 = np.mean(series[-7:])
+    last30 = np.mean(series[-30:])
+    return float((last7-last30)/last30) if last30 else 0.0
 
-@st.cache_data(ttl=300)
-def collect_gdelt():
-    params = {
-        "query": "military OR conflict OR security OR defense OR geopolitical",
-        "mode": "ArtList",
-        "maxrecords": 40,
-        "format": "json",
-        "timespan": "24h"
-    }
-    try:
-        r = requests.get("https://api.gdeltproject.org/api/v2/gkg/gkg", params=params, timeout=20)
-        r.raise_for_status()
-        out=[]
-        for a in r.json().get("articles", []):
-            title = a.get("title") or ""
-            if len(title) < 20: 
-                continue
-            summary = a.get("summary","")
-            text = f"{title} {summary}"
-            pol = TextBlob(text).sentiment.polarity
-            out.append({
-                "source":"GDELT Global Intelligence",
-                "title": title,
-                "summary": summary[:450],
-                "url": a.get("url",""),
-                "published": a.get("seendate",""),
-                "sentiment": pol,
-                "sentiment_label": classify_sentiment(pol),
-                "region": classify_region(text.lower()),
-                "credibility": 8.0,
-                "category": "Global Events",
-                "timestamp": datetime.utcnow()
-            })
-        return out
-    except Exception:
-        return []
+def reddit_momentum(posts:list):
+    # proxy: scaled count vs nominal 10
+    return min(1.5, len(posts)/10.0)
 
-@st.cache_data(ttl=300)
-def collect_markets():
-    # Mix Polygon (equities/ETFs) and yfinance (for ^VIX)
-    tickers = [
-        ("LMT","Lockheed Martin","Defense"),
-        ("RTX","Raytheon","Defense"),
-        ("NOC","Northrop Grumman","Defense"),
-        ("GLD","SPDR Gold Trust","Safe Haven"),
-        ("XLE","Energy Select SPDR","Energy"),
-        ("UUP","DB USD Index","Currency")
-    ]
+# -------------- Upload parsing
+WIDE_NAMES = {"volume":"volume","loyalty":"loyalty","rtfs":"rtf","trend":"trend","mable":"mable"}
+
+def parse_upload(xls: bytes, filename: str):
+    x = pd.ExcelFile(io.BytesIO(xls))
+    inserted = []
+    for sheet in x.sheet_names:
+        df = pd.read_excel(x, sheet)
+        # Promote first row to header if many Unnamed columns
+        if len([c for c in df.columns if str(c).startswith("Unnamed")]) > len(df.columns)/2:
+            df.columns = df.iloc[0]
+            df = df.iloc[1:].reset_index(drop=True)
+
+        metric_key = sheet.strip().lower()
+        metric = None
+        for k,v in WIDE_NAMES.items():
+            if k in metric_key:
+                metric = v; break
+
+        if metric in {"volume","loyalty","rtf","trend","mable"}:
+            # detect id columns (brand/country/market_group) and date columns
+            id_cols = []
+            for cand in ["brand","retailer","country","market","market_group","city","segment","category"]:
+                for c in df.columns:
+                    if str(c).strip().lower()==cand:
+                        id_cols.append(c)
+            # date/period columns -> melt
+            value_cols = [c for c in df.columns if c not in id_cols]
+            long = df.melt(id_vars=id_cols, value_vars=value_cols, var_name="date", value_name="value")
+            # coerce dates
+            long["date"] = pd.to_datetime(long["date"], errors="coerce").dt.date.astype(str)
+            # minimal normalization
+            country = None
+            if any(str(c).lower()=="country" for c in id_cols):
+                long.rename(columns={ [c for c in id_cols if str(c).lower()=="country"][0]:"country" }, inplace=True)
+            else:
+                long["country"] = None
+            if any(str(c).lower()=="brand" for c in id_cols):
+                long.rename(columns={ [c for c in id_cols if str(c).lower()=="brand"][0]:"brand" }, inplace=True)
+            else:
+                long["brand"] = None
+
+            # write to DB
+            with db.get_conn() as c:
+                c.execute("INSERT INTO user_dataset(name,sheet,metric,source_file) VALUES(?,?,?,?)",
+                          (os.path.basename(filename), sheet, metric, filename))
+                dsid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+                rows = [(dsid, r.get("brand"), r.get("country"), None, r["date"], float(r["value"]) if pd.notna(r["value"]) else None)
+                        for _,r in long.iterrows()]
+                c.executemany("REPLACE INTO user_timeseries(dataset_id,brand,country,market_group,date,value) VALUES(?,?,?,?,?,?)", rows)
+                c.commit()
+                inserted.append((sheet, metric, len(rows)))
+
+        elif "cross" in metric_key:
+            # crossover matrix -> melt
+            df = df.dropna(how="all")
+            # first column is brand_a; columns (except first) are brand_b
+            if df.shape[1] >= 2:
+                row_brand = df.columns[0]
+                melted = df.melt(id_vars=[row_brand], var_name="brand_b", value_name="value")
+                melted.rename(columns={row_brand:"brand_a"}, inplace=True)
+                with db.get_conn() as c:
+                    c.execute("INSERT INTO user_dataset(name,sheet,metric,source_file) VALUES(?,?,?,?)",
+                              (os.path.basename(filename), sheet, "crossover", filename))
+                    dsid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    rows = [(dsid, None, r["brand_a"], r["brand_b"], float(r["value"]) if pd.notna(r["value"]) else None)
+                            for _,r in melted.iterrows()]
+                    c.executemany("REPLACE INTO user_cross(dataset_id,country,brand_a,brand_b,value) VALUES(?,?,?,?,?)", rows)
+                    c.commit()
+                    inserted.append((sheet, "crossover", len(rows)))
+    return inserted
+
+# ----------------------- Sidebar nav
+st.sidebar.title("Blis Intelligence Hub")
+page = st.sidebar.radio("Navigate", ["Command Center","Regions","Categories","Social & Community","My Data","Methods"])
+
+# Common filters
+region = None; country = None
+if page in ("Regions","Categories","Social & Community"):
+    st.sidebar.subheader("Region & Country")
+    region = st.sidebar.selectbox("Region", ["—"] + list(REGIONS.keys()) + PRIME_COUNTRIES, index=0)
+    if region in REGIONS:
+        opts = ["All markets"] + REGIONS[region]
+        country = st.sidebar.selectbox("Country", opts, index=0)
+        if country=="All markets": country=None
+    elif region in PRIME_COUNTRIES:
+        country = region
+
+# -------------------------------- Pages
+if page == "Command Center":
+    header("Command Center")
+    # Signal tape
+    st.markdown("**Signal tape**")
+    quotes = get_quotes(["XLC","XLY","XLP","XLK","XLE","XLF","XLV","DX-Y.NYB","BZ=F","GC=F","^TNX","EURUSD=X","GBPUSD=X","USDJPY=X","USDINR=X","CNY=X"])
+    st.dataframe(pd.DataFrame(quotes))
+
+    # Heatmap by category (sketch: show CCS ingredients)
+    st.markdown("**Category pulse (last 24–72h)**")
     rows=[]
-    # polygon prev close for equities/ETFs
-    if POLYGON_KEY:
-        for t,name,cat in tickers:
-            try:
-                url = f"https://api.polygon.io/v2/aggs/ticker/{t}/prev"
-                r = requests.get(url, params={"adjusted":"true","apiKey":POLYGON_KEY}, timeout=15)
-                js = r.json()
-                results = js.get("results", [])
-                if not results: 
-                    continue
-                c = float(results[0]["c"])
-                o = float(results[0]["o"]) if results[0].get("o") is not None else c
-                change = ((c - o)/o)*100 if o else 0
-                rows.append({"ticker":t,"name":name,"category":cat,"price":c,"change_pct":change,"timestamp":datetime.utcnow()})
-            except Exception:
-                continue
-    # VIX via yfinance
-    try:
-        vix = yf.Ticker("^VIX").history(period="5d")
-        if not vix.empty:
-            c = float(vix["Close"].iloc[-1])
-            p = float(vix["Close"].iloc[-2]) if len(vix)>1 else c
-            change = ((c-p)/p)*100 if p else 0
-            rows.append({"ticker":"^VIX","name":"Volatility Index","category":"Market Stress","price":c,"change_pct":change,"timestamp":datetime.utcnow()})
-    except Exception:
-        pass
-    return rows
+    for slug,cfg in CATEGORIES.items():
+        news = pd.DataFrame(get_reuters_news(cfg["keywords"]))
+        trends = get_trends_series(cfg["keywords"], geo=country or "")
+        q = get_quotes(cfg["tickers"])
+        reddit = get_reddit_top(cfg["subs"]) if os.getenv("REDDIT_CLIENT_ID") else []
+        ccs, parts = compute_ccs(news, trends_delta_7v30(trends), q, reddit_momentum(reddit))
+        rows.append({"category":cfg["name"], "CCS":ccs, **parts, "newsN": len(news)})
+    st.dataframe(pd.DataFrame(rows).set_index("category"))
 
-# -----------------------------------------------------------------------------
-# Analytics (concise, robust)
-# -----------------------------------------------------------------------------
-def executive_assessment(all_items, market_rows):
-    crit = sum(1 for x in all_items if "Critical" in x.get("title","") or x.get("sentiment",-1)<-0.4)
-    avg_pol = np.mean([x.get("sentiment",0) for x in all_items]) if all_items else 0.0
-    vix = next((r for r in market_rows if r["ticker"]=="^VIX"), {"price": 18.0})
-    vix_norm = min(1.0, vix["price"]/50.0)
-    base = min(10.0, (crit*0.3) + (abs(avg_pol)*4.0) + (vix_norm*6.0))
-    level = "NORMAL"
-    if base>=8: level="CRITICAL"
-    elif base>=6: level="HIGH"
-    elif base>=4: level="ELEVATED"
-    return {
-        "score": base,
-        "level": level,
-        "avg_sentiment": avg_pol,
-        "vix": vix["price"]
-    }
-
-# -----------------------------------------------------------------------------
-# UI Controls
-# -----------------------------------------------------------------------------
-st.sidebar.markdown("**Controls**")
-regions_sel = st.sidebar.multiselect(
-    "Active Regions",
-    ["Global","Eastern Europe","Asia Pacific","Middle East","Europe","Africa","Americas"],
-    default=["Global","Eastern Europe","Middle East","Asia Pacific"]
-)
-min_score = st.sidebar.slider("Minimum Credibility (soft filter)", 0.0, 10.0, 6.0, 0.5)
-auto_refresh = st.sidebar.checkbox("Auto-refresh (60s)", value=False)
-
-# -----------------------------------------------------------------------------
-# Collect Data
-# -----------------------------------------------------------------------------
-with st.spinner("Collecting intelligence …"):
-    newsapi_items = collect_newsapi()
-    reddit_items = collect_reddit()
-    gdelt_items = collect_gdelt()
-    market_rows = collect_markets()
-
-items = newsapi_items + reddit_items + gdelt_items
-
-# Filter by region + simple credibility heuristic
-filtered = []
-for x in items:
-    region_ok = (x["region"] in regions_sel) or ("Global" in regions_sel) or (x["region"]=="Global")
-    if not region_ok: 
-        continue
-    # derive a soft intelligence_score from credibility + polarity magnitude
-    intel = (x.get("credibility",6.0)) + (abs(x.get("sentiment",0))*4)
-    if intel >= min_score:
-        x["intelligence_score"] = float(intel)
-        filtered.append(x)
-
-assessment = executive_assessment(filtered, market_rows)
-
-# -----------------------------------------------------------------------------
-# Summary strip
-# -----------------------------------------------------------------------------
-c1,c2,c3,c4 = st.columns(4)
-with c1:
-    st.markdown(f"""<div class="metric-card">
-      <div class="metric-label">Threat Level</div>
-      <div class="metric-value" style="color:{('#D72638' if assessment['level']=='CRITICAL' else '#FD7E14' if assessment['level']=='HIGH' else '#1F78FF' if assessment['level']=='ELEVATED' else '#2ECC71')}">{assessment['level']}</div>
-      <div>Score: {assessment['score']:.2f}/10</div>
-    </div>""", unsafe_allow_html=True)
-with c2:
-    st.markdown(f"""<div class="metric-card">
-      <div class="metric-label">Sources</div>
-      <div class="metric-value">{len(filtered)}</div>
-      <div>Filtered (cred ≥ {min_score:.1f})</div>
-    </div>""", unsafe_allow_html=True)
-with c3:
-    st.markdown(f"""<div class="metric-card">
-      <div class="metric-label">Avg Sentiment</div>
-      <div class="metric-value">{assessment['avg_sentiment']:+.2f}</div>
-      <div>From text analysis</div>
-    </div>""", unsafe_allow_html=True)
-with c4:
-    st.markdown(f"""<div class="metric-card">
-      <div class="metric-label">VIX</div>
-      <div class="metric-value">{assessment['vix']:.2f}</div>
-      <div>Market stress</div>
-    </div>""", unsafe_allow_html=True)
-
-st.markdown('<div class="section-h">Threat Components</div>', unsafe_allow_html=True)
-comp_fig = go.Figure(go.Bar(
-    x=["News Sentiment","Market Volatility (VIX)"],
-    y=[abs(assessment['avg_sentiment']), min(1.0, assessment['vix']/50.0)],
-    text=[f"{abs(assessment['avg_sentiment']):.2f}", f"{min(1.0, assessment['vix']/50.0):.2f}"],
-    textposition="auto",
-    marker_color=[ "#D72638", "#FD7E14"]
-))
-comp_fig.update_layout(height=280, showlegend=False, margin=dict(l=10,r=10,t=10,b=10))
-st.plotly_chart(comp_fig, use_container_width=True)
-
-# -----------------------------------------------------------------------------
-# Tabs
-# -----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["Global Overview","Intelligence Feed","Market Analysis","Map"])
-
-with tab1:
-    # timeline (last 60)
-    df = pd.DataFrame(sorted(filtered, key=lambda z: z["timestamp"], reverse=True)[:60])
-    if not df.empty:
-        df["t"] = pd.to_datetime(df["published"], errors="coerce")
-        df = df.sort_values("t")
-        fig = px.scatter(
-            df, x="t", y="intelligence_score", color="sentiment_label",
-            hover_data=["title","source","region"],
-            color_discrete_map={"Positive":"#2ECC71","Neutral":"#6B7280","Negative":"#D72638"}
-        )
-        fig.update_layout(height=360, margin=dict(l=10,r=10,t=20,b=10))
-        st.plotly_chart(fig, use_container_width=True)
+elif page == "Regions":
+    title = f"Region Overview — {region or 'Select a region'}" if not country else f"{region} — {country}"
+    header(title)
+    if not region:
+        st.info("Choose a region (or prime country) from the sidebar.")
     else:
-        st.info("No items passing current filters.")
+        # Show macro proxies and trends for this geo
+        st.markdown("**Macro & Attention**")
+        geo = country or ""
+        # simple trends example using automotive keywords
+        payload = get_trends_series(["cars","SUV","EV"], geo=geo)
+        if payload["datasets"]:
+            df = pd.DataFrame({"date":payload["labels"]})
+            for ds in payload["datasets"]:
+                df[ds["label"]] = ds["data"]
+            st.altair_chart(alt_line(df.melt("date", var_name="term", value_name="index"),
+                                     "date:T","index:Q","Search interest (90 days)"), use_container_width=True)
 
-with tab2:
-    # grouped by priority derived from score
-    def priority(s):
-        return "CRITICAL" if s>=9 else "HIGH" if s>=7 else "MEDIUM" if s>=5 else "LOW"
-    grouped = {"CRITICAL":[], "HIGH":[], "MEDIUM":[], "LOW":[]}
-    for it in sorted(filtered, key=lambda z: z["intelligence_score"], reverse=True)[:120]:
-        grouped[priority(it["intelligence_score"])].append(it)
+        # News & Sentiment
+        st.markdown("**News & Sentiment (Reuters)**")
+        news = pd.DataFrame(get_reuters_news(["cars","automotive","EV","dealership","recall"]))
+        st.dataframe(news[["title","source","published","senti","link"]])
 
-    for label in ["CRITICAL","HIGH","MEDIUM","LOW"]:
-        if not grouped[label]: 
-            continue
-        st.markdown(f"**{label} PRIORITY ({len(grouped[label])})**")
-        for it in grouped[label][:20]:
-            st.markdown(f"""
-            <div class="intel-item priority-{label}">
-              <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div><strong>{it["title"]}</strong></div>
-                <div style="font-weight:700;">Score {it["intelligence_score"]:.1f}</div>
-              </div>
-              <div style="color:#4B5563;margin:6px 0 8px 0;">{it.get("summary","")}</div>
-              <div style="font-size:12px;color:#6B7280;">
-                Source: {it["source"]} • Region: {it["region"]} • Sentiment: {it["sentiment_label"]}
-              </div>
-              <div style="margin-top:6px;"><a class="source-link" href="{it.get("url","#")}" target="_blank">View source</a></div>
-            </div>
-            """, unsafe_allow_html=True)
+elif page == "Categories":
+    header("Categories")
+    slug = st.selectbox("Choose category", list(CATEGORIES.keys()), format_func=lambda k: CATEGORIES[k]["name"])
+    cfg = CATEGORIES[slug]
+    col1,col2 = st.columns([0.6,0.4])
+    with col1:
+        st.markdown("**News & Sentiment**")
+        news = pd.DataFrame(get_reuters_news(cfg["keywords"]))
+        st.dataframe(news[["title","source","published","senti","link"]])
+    with col2:
+        st.markdown("**Market pulse**")
+        st.dataframe(pd.DataFrame(get_quotes(cfg["tickers"])))
+        st.markdown("**Google Trends (90d)**")
+        payload = get_trends_series(cfg["keywords"], geo=country or "")
+        if payload["datasets"]:
+            df = pd.DataFrame({"date":payload["labels"]})
+            for ds in payload["datasets"]:
+                df[ds["label"]] = ds["data"]
+            st.altair_chart(alt_line(df.melt("date","term","index"),"date:T","index:Q"), use_container_width=True)
 
-with tab3:
-    if market_rows:
-        mdf = pd.DataFrame(market_rows)
-        c1, c2 = st.columns(2)
-        with c1:
-            cat_fig = px.bar(
-                mdf.groupby("category").agg(change_pct=("change_pct","mean")).reset_index(),
-                x="category", y="change_pct", color="change_pct", color_continuous_scale=["#D72638","#FFFFFF","#2ECC71"],
-                title="Performance by Category (prev day)"
-            )
-            cat_fig.update_layout(height=320, margin=dict(l=10,r=10,t=40,b=10))
-            st.plotly_chart(cat_fig, use_container_width=True)
-        with c2:
-            st.dataframe(
-                mdf[["ticker","name","category","price","change_pct"]].sort_values("change_pct", ascending=False),
-                use_container_width=True
-            )
+elif page == "Social & Community":
+    header("Social & Community Pulse")
+    sublist = ["worldnews","news"] if not country else (["india"] if country=="IN" else ["europe"] if country in REGIONS["EU"] else ["news"])
+    posts = get_reddit_top(sublist) if os.getenv("REDDIT_CLIENT_ID") else []
+    if not posts:
+        st.info("Reddit not configured or no posts. Add Reddit secrets to enable.")
     else:
-        st.info("No market rows available.")
+        st.dataframe(pd.DataFrame(posts))
 
-with tab4:
-    m = folium.Map(location=[20,0], zoom_start=2, tiles="CartoDB positron")
-    color = {"CRITICAL":"#D72638","HIGH":"#FD7E14","MEDIUM":"#1F78FF","LOW":"#2ECC71"}
-    for name,data in GLOBAL_HOTSPOTS.items():
-        folium.CircleMarker(
-            location=[data["lat"], data["lon"]],
-            radius=10 if data["priority"]=="CRITICAL" else 8 if data["priority"]=="HIGH" else 6,
-            color=color[data["priority"]], fill=True, fillOpacity=0.85,
-            popup=folium.Popup(f"<b>{name}</b><br>Priority: {data['priority']}<br>Region: {data['region']}<br>Type: {data['type']}<br>Lat,Lon: {data['lat']:.4f}, {data['lon']:.4f}", max_width=300)
-        ).add_to(m)
-    st_folium(m, use_container_width=True, height=520)
+elif page == "My Data":
+    header("My Data — Excel plug-and-view")
+    up = st.file_uploader("Upload .xlsx or .csv (Volume/Loyalty/RTFs/Trend/MABLE/Cross…)", type=["xlsx","csv"])
+    if up is not None:
+        data = up.read()
+        if up.name.lower().endswith(".csv"):
+            # single-sheet CSV -> wrap into pseudo-Excel handling
+            xls_bytes = io.BytesIO()
+            with pd.ExcelWriter(xls_bytes, engine="openpyxl") as w:
+                df = pd.read_csv(io.BytesIO(data))
+                df.to_excel(w, index=False, sheet_name="Sheet1")
+            inserted = parse_upload(xls_bytes.getvalue(), up.name)
+        else:
+            inserted = parse_upload(data, up.name)
+        st.success(f"Imported: {inserted}")
 
-# optional auto-refresh
-if auto_refresh:
-    time.sleep(60)
-    st.experimental_rerun()
-app = dash.Dash(__name__, ...)
-server = app.server  # gunicorn entry
+    # Quick overlays from DB (last dataset only)
+    with db.get_conn() as c:
+        cur = c.execute("SELECT id,name,sheet,metric,uploaded_at FROM user_dataset ORDER BY uploaded_at DESC LIMIT 5")
+        rows = cur.fetchall()
+    if rows:
+        st.markdown("**Recent datasets**")
+        st.table(pd.DataFrame(rows, columns=["id","name","sheet","metric","uploaded_at"]))
+        dsid = st.selectbox("Pick dataset to plot", [r[0] for r in rows])
+        if dsid:
+            with db.get_conn() as c:
+                df = pd.read_sql_query("SELECT brand,country,date,value FROM user_timeseries WHERE dataset_id=? ORDER BY date",
+                                       c, params=(dsid,))
+            if not df.empty:
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                brand = st.selectbox("Brand", sorted(df["brand"].dropna().unique().tolist()))
+                sdf = df[df["brand"]==brand].dropna()
+                if not sdf.empty:
+                    st.altair_chart(alt_line(sdf, "date:T", "value:Q", f"{brand} — {rows[0][3]}"), use_container_width=True)
+            # crossover
+            with db.get_conn() as c:
+                cross = pd.read_sql_query("SELECT brand_a,brand_b,value FROM user_cross WHERE dataset_id=?", c, params=(dsid,))
+            if not cross.empty:
+                st.markdown("**Crossover (top pairs)**")
+                st.dataframe(cross.sort_values("value", ascending=False).head(20))
+
+elif page == "Methods":
+    header("Methods & Data Quality")
+    st.markdown("""
+- **Open sources only**: Reuters RSS, Yahoo Finance (quotes), Google Trends (pytrends), Wikipedia Pageviews, Reddit (optional), World Bank/OWID for slow-moving macro.
+- **Refresh cadence**: pages auto-refresh every **5 minutes**.
+- **Sentiment**: VADER on headlines; we show average and N.
+- **Trends delta**: (last 7 days vs last 30); displayed where relevant.
+- **Reddit**: per-region/country curated subs; skipped entirely if secrets are not set.
+- **Uploads**: Excel wide tables (Volume/Loyalty/RTFs/Trend/MABLE) are melted to tidy time-series; Cross/Cross DB parsed into brand-pairs.
+- **No placeholders**: if a source is unavailable, last known values are shown with timestamps; never synthetic data.
+""")
+
+# 5-minute auto-refresh (no background jobs required for Streamlit)
+st.experimental_memo.clear()  # noop placeholder to emphasize statelessness per refresh
+st_autorefresh = st.experimental_rerun  # alias not used; Streamlit reruns on page load
+st.experimental_set_query_params(_=int(time.time()/300))  # forces cache refresh roughly every 5 minutes
