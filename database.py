@@ -1,117 +1,84 @@
-import sqlite3
-import json
-from datetime import datetime
-import pandas as pd
+# Lightweight persistence for uploads and last-known open-data pulls (SQLite via pandas).
+# Works on Replit/Render; no external DB required.
 
-class IntelligenceDatabase:
-    """SQLite database for storing intelligence data"""
-    
-    def __init__(self, db_path="intelligence.db"):
-        self.db_path = db_path
-        self.init_database()
-    
-    def init_database(self):
-        """Initialize database tables"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # News intelligence table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS news_intelligence (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                summary TEXT,
-                source TEXT,
-                region TEXT,
-                sentiment_score REAL,
-                relevance_score REAL,
-                timestamp DATETIME,
-                raw_data TEXT
-            )
-        ''')
-        
-        # Mobility intelligence table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS mobility_intelligence (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                region TEXT,
-                type TEXT,
-                activity_level REAL,
-                risk_level TEXT,
-                latitude REAL,
-                longitude REAL,
-                confidence REAL,
-                source TEXT,
-                timestamp DATETIME
-            )
-        ''')
-        
-        # Market data table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS market_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT,
-                price REAL,
-                change_value REAL,
-                change_percent REAL,
-                volume INTEGER,
-                data_type TEXT,
-                timestamp DATETIME
-            )
-        ''')
-        
-        # Threat assessments table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS threat_assessments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                threat_score REAL,
-                threat_level TEXT,
-                sentiment_component REAL,
-                mobility_component REAL,
-                market_component REAL,
-                timestamp DATETIME
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-    
-    def store_news_data(self, news_data):
-        """Store news intelligence data"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        for item in news_data:
-            cursor.execute('''
-                INSERT INTO news_intelligence 
-                (title, summary, source, region, sentiment_score, relevance_score, timestamp, raw_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                item.get('title'),
-                item.get('summary'),
-                item.get('source'),
-                item.get('region'),
-                item.get('sentiment_score'),
-                item.get('relevance_score'),
-                item.get('timestamp'),
-                json.dumps(item)
-            ))
-        
-        conn.commit()
-        conn.close()
-    
-    def get_historical_threat_levels(self, days=7):
-        """Get historical threat assessment data"""
-        conn = sqlite3.connect(self.db_path)
-        
-        query = '''
-            SELECT threat_score, threat_level, timestamp 
-            FROM threat_assessments 
-            WHERE timestamp >= datetime('now', '-{} days')
-            ORDER BY timestamp
-        '''.format(days)
-        
-        df = pd.read_sql_query(query, conn)
-        conn.close()
-        
-        return df.to_dict('records')
+from __future__ import annotations
+import os, sqlite3, json
+from contextlib import closing
+
+DB_PATH = os.getenv("HUB_DB_PATH", "hub.sqlite3")
+
+SCHEMA = """
+PRAGMA journal_mode=WAL;
+
+CREATE TABLE IF NOT EXISTS user_dataset(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  sheet TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  source_file TEXT NOT NULL,
+  uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_timeseries(
+  dataset_id INTEGER NOT NULL,
+  brand TEXT,
+  country TEXT,
+  market_group TEXT,
+  date TEXT NOT NULL,
+  value REAL,
+  PRIMARY KEY(dataset_id, brand, country, date),
+  FOREIGN KEY(dataset_id) REFERENCES user_dataset(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_cross(
+  dataset_id INTEGER NOT NULL,
+  country TEXT,
+  brand_a TEXT,
+  brand_b TEXT,
+  value REAL,
+  PRIMARY KEY(dataset_id, brand_a, brand_b, country),
+  FOREIGN KEY(dataset_id) REFERENCES user_dataset(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ref_brand(
+  brand TEXT PRIMARY KEY,
+  sector TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ref_geo(
+  country TEXT NOT NULL,
+  region TEXT NOT NULL,
+  market_group TEXT,
+  PRIMARY KEY(country, region)
+);
+
+-- cache last pulls (open sources)
+CREATE TABLE IF NOT EXISTS cache_blob(
+  key TEXT PRIMARY KEY,
+  payload TEXT,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+def get_conn():
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys=ON;")
+    return conn
+
+def init():
+    with closing(get_conn()) as c:
+        c.executescript(SCHEMA)
+        c.commit()
+
+def put_cache(key: str, payload: dict):
+    with closing(get_conn()) as c:
+        c.execute("REPLACE INTO cache_blob(key,payload,ts) VALUES(?,?,CURRENT_TIMESTAMP)",
+                  (key, json.dumps(payload)))
+        c.commit()
+
+def get_cache(key: str):
+    with closing(get_conn()) as c:
+        cur = c.execute("SELECT payload FROM cache_blob WHERE key=?", (key,))
+        row = cur.fetchone()
+        return json.loads(row[0]) if row else None
